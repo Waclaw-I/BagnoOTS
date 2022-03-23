@@ -63,6 +63,8 @@ extern Weapons* g_weapons;
 extern Scripts* g_scripts;
 extern Modules* g_modules;
 extern Imbuements* g_imbuements;
+extern IOPrey g_prey;
+extern IOBestiary g_bestiary;
 extern LuaEnvironment g_luaEnvironment;
 
 Game::Game()
@@ -5829,6 +5831,34 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 		damage.primary.value = std::abs(damage.primary.value);
 		damage.secondary.value = std::abs(damage.secondary.value);
 
+		Monster* targetMonster;
+		if (target && target->getMonster()) {
+			targetMonster = target->getMonster();
+		} else {
+			targetMonster = nullptr;
+		}
+
+		const Monster* attackerMonster;
+		if (attacker && attacker->getMonster()) {
+			attackerMonster = attacker->getMonster();
+		} else {
+			attackerMonster = nullptr;
+		}
+
+		if (attackerPlayer && targetMonster) {
+			const PreySlot* slot = attackerPlayer->getPreyWithMonster(targetMonster->getRaceId());
+			if (slot && slot->isOccupied() && slot->bonus == PreyBonus_Damage && slot->bonusTimeLeft > 0) {
+				damage.primary.value += static_cast<int32_t>(std::ceil((damage.primary.value * slot->bonusPercentage) / 100));
+				damage.secondary.value += static_cast<int32_t>(std::ceil((damage.secondary.value * slot->bonusPercentage) / 100));
+			}
+		} else if (attackerMonster && targetPlayer) {
+			const PreySlot* slot = targetPlayer->getPreyWithMonster(attackerMonster->getRaceId());
+			if (slot && slot->isOccupied() && slot->bonus == PreyBonus_Defense && slot->bonusTimeLeft > 0) {
+				damage.primary.value -= static_cast<int32_t>(std::ceil((damage.primary.value * slot->bonusPercentage) / 100));
+				damage.secondary.value -= static_cast<int32_t>(std::ceil((damage.secondary.value * slot->bonusPercentage) / 100));
+			}
+		}
+
 		TextMessage message;
 		message.position = targetPos;
 
@@ -5855,25 +5885,20 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 			addMagicEffect(spectators, targetPos, CONST_ME_CRITICAL_DAMAGE);
 		}
 
-		if (!damage.extension && attacker && attacker->getMonster() && targetPlayer) {
+		if (!damage.extension && attackerMonster && targetPlayer) {
 			// Charm rune (target as player)
-			MonsterType* mType = g_monsters.getMonsterType(attacker->getName());
-			if (mType) {
-				IOBestiary g_bestiary;
-				charmRune_t activeCharm = g_bestiary.getCharmFromTarget(targetPlayer, mType);
-				if (activeCharm != CHARM_NONE && activeCharm != CHARM_CLEANSE) {
-					Charm* charm = g_bestiary.getBestiaryCharm(activeCharm);
-					if (charm && charm->type == CHARM_DEFENSIVE &&(charm->chance > normal_random(0, 100))) {
-						if (g_bestiary.parseCharmCombat(charm, targetPlayer, attacker, (damage.primary.value + damage.secondary.value))) {
-							return false; // Dodge charm
-						}
-					}
+			if (charmRune_t activeCharm = g_bestiary.getCharmFromTarget(targetPlayer, g_monsters.getMonsterTypeByRaceId(attackerMonster->getRaceId()));
+				activeCharm != CHARM_NONE && activeCharm != CHARM_CLEANSE) {
+				if (Charm* charm = g_bestiary.getBestiaryCharm(activeCharm);
+					charm->type == CHARM_DEFENSIVE && charm->chance > normal_random(0, 100) && 
+					g_bestiary.parseCharmCombat(charm, targetPlayer, attacker, (damage.primary.value + damage.secondary.value))) {
+					return false; // Dodge charm
 				}
 			}
 		}
 
 		if (target->hasCondition(CONDITION_MANASHIELD) && damage.primary.type != COMBAT_UNDEFINEDDAMAGE) {
-      		int32_t manaDamage = std::min<int32_t>(target->getMana(), healthChange);
+      int32_t manaDamage = std::min<int32_t>(target->getMana(), healthChange);
 			uint16_t manaShield = target->getManaShield();
 			if (manaShield > 0) {
 				if (manaShield > manaDamage) {
@@ -6013,16 +6038,14 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 		}
 
 		target->drainHealth(attacker, realDamage);
-		if (realDamage > 0) {
-			if (Monster* targetMonster = target->getMonster()) {
-				if (attackerPlayer && attackerPlayer->getPlayer()) {
-					attackerPlayer->updateImpactTracker(damage.secondary.type, damage.secondary.value);
-				}
+		if (realDamage > 0 && targetMonster) {
+			if (attackerPlayer && attackerPlayer->getPlayer()) {
+				attackerPlayer->updateImpactTracker(damage.secondary.type, damage.secondary.value);
+			}
 
-				if (targetMonster->israndomStepping()) {
-					targetMonster->setIgnoreFieldDamage(true);
-					targetMonster->updateMapCache();
-				}
+			if (targetMonster->israndomStepping()) {
+				targetMonster->setIgnoreFieldDamage(true);
+				targetMonster->updateMapCache();
 			}
 		}
 
@@ -6030,19 +6053,14 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 		if (attackerPlayer) {
 			//life leech
 			uint16_t lifeChance = attackerPlayer->getSkillLevel(SKILL_LIFE_LEECH_CHANCE);
-      		uint16_t lifeSkill = attackerPlayer->getSkillLevel(SKILL_LIFE_LEECH_AMOUNT);
+			uint16_t lifeSkill = attackerPlayer->getSkillLevel(SKILL_LIFE_LEECH_AMOUNT);
 			if (normal_random(0, 100) < lifeChance) {
 				// Vampiric charm rune
-				if (target && target->getMonster()) {
-					uint16_t playerCharmRaceidVamp = attackerPlayer->parseRacebyCharm(CHARM_VAMP, false, 0);
-					if (playerCharmRaceidVamp != 0) {
-						MonsterType* mType = g_monsters.getMonsterType(target->getName());
-						if (mType && playerCharmRaceidVamp == mType->info.raceid) {
-							IOBestiary g_bestiary;
-							Charm* lifec = g_bestiary.getBestiaryCharm(CHARM_VAMP);
-							if (lifec) {
-								lifeSkill += lifec->percent;
-							}
+				if (targetMonster) {
+					if (uint16_t playerCharmRaceidVamp = attackerPlayer->parseRacebyCharm(CHARM_VAMP, false, 0); 
+						playerCharmRaceidVamp != 0 && playerCharmRaceidVamp == targetMonster->getRaceId()) {
+						if (const Charm* lifec = g_bestiary.getBestiaryCharm(CHARM_VAMP)) {
+							lifeSkill += lifec->percent;
 						}
 					}
 				}
@@ -6062,16 +6080,11 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
       		uint16_t manaSkill = attackerPlayer->getSkillLevel(SKILL_MANA_LEECH_AMOUNT);
 			if (normal_random(0, 100) < manaChance) {
 				// Void charm rune
-				if (target && target->getMonster()) {
-					uint16_t playerCharmRaceidVoid = attackerPlayer->parseRacebyCharm(CHARM_VOID, false, 0);
-					if (playerCharmRaceidVoid != 0) {
-						MonsterType* mType = g_monsters.getMonsterType(target->getName());
-						if (mType && playerCharmRaceidVoid == mType->info.raceid) {
-							IOBestiary g_bestiary;
-							Charm* voidc = g_bestiary.getBestiaryCharm(CHARM_VOID);
-							if (voidc) {
-								manaSkill += voidc->percent;
-							}
+				if (targetMonster) {
+					if (uint16_t playerCharmRaceidVoid = attackerPlayer->parseRacebyCharm(CHARM_VOID, false, 0);
+						playerCharmRaceidVoid != 0 && playerCharmRaceidVoid == targetMonster->getRace()) {
+						if (const Charm* voidc = g_bestiary.getBestiaryCharm(CHARM_VOID)) {
+							manaSkill += voidc->percent;
 						}
 					}
 				}
@@ -6087,16 +6100,12 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 			}
 
 			//Charm rune (attacker as player)
-			if (!damage.extension && target && target->getMonster()) {
-				MonsterType* mType = g_monsters.getMonsterType(target->getName());
-				if (mType) {
-					IOBestiary g_bestiary;
-					charmRune_t activeCharm = g_bestiary.getCharmFromTarget(attackerPlayer, mType);
-					if (activeCharm != CHARM_NONE) {
-						Charm* charm = g_bestiary.getBestiaryCharm(activeCharm);
-						if (charm && charm->type == CHARM_OFFENSIVE && (charm->chance >= normal_random(0, 100))) {
-							g_bestiary.parseCharmCombat(charm, attackerPlayer, target, realDamage);
-						}
+			if (!damage.extension && targetMonster) {
+				if (charmRune_t activeCharm = g_bestiary.getCharmFromTarget(attackerPlayer, g_monsters.getMonsterTypeByRaceId(targetMonster->getRaceId()));
+					activeCharm != CHARM_NONE) {
+					if (Charm* charm = g_bestiary.getBestiaryCharm(activeCharm);
+						charm->type == CHARM_OFFENSIVE && (charm->chance >= normal_random(0, 100))) {
+						g_bestiary.parseCharmCombat(charm, attackerPlayer, target, realDamage);
 					}
 				}
 			}
@@ -6347,7 +6356,6 @@ bool Game::combatChangeMana(Creature* attacker, Creature* target, CombatDamage& 
 			//Charm rune (target as player)
 			MonsterType* mType = g_monsters.getMonsterType(attacker->getName());
 			if (mType) {
-				IOBestiary g_bestiary;
 				charmRune_t activeCharm = g_bestiary.getCharmFromTarget(targetPlayer, mType);
 				if (activeCharm != CHARM_NONE && activeCharm != CHARM_CLEANSE) {
 					Charm* charm = g_bestiary.getBestiaryCharm(activeCharm);
@@ -6673,6 +6681,7 @@ void Game::addBestiaryList(uint16_t raceid, std::string name)
 	if (it != BestiaryList.end()) {
 		return;
 	}
+
 	BestiaryList.insert(std::pair<uint16_t, std::string>(raceid, name));
 }
 
@@ -7307,6 +7316,26 @@ void Game::playerDebugAssert(uint32_t playerId, const std::string& assertLine, c
 		fprintf(file, "%s\n%s\n%s\n%s\n", assertLine.c_str(), date.c_str(), description.c_str(), comment.c_str());
 		fclose(file);
 	}
+}
+
+void Game::playerPreyAction(uint32_t playerId, uint8_t slot, uint8_t action, uint8_t option, int8_t index, uint16_t raceId)
+{
+	Player* player = getPlayerByID(playerId);
+	if (!player) {
+		return;
+	}
+
+	g_prey.ParsePreyAction(player, static_cast<PreySlot_t>(slot), static_cast<PreyAction_t>(action), static_cast<PreyOption_t>(option), index, raceId);
+}
+
+void Game::playerTaskHuntingAction(uint32_t playerId, uint8_t slot, uint8_t action, bool upgrade, uint16_t raceId)
+{
+	Player* player = getPlayerByID(playerId);
+	if (!player) {
+		return;
+	}
+
+	g_prey.ParseTaskHuntingAction(player, static_cast<PreySlot_t>(slot), static_cast<PreyTaskAction_t>(action), upgrade, raceId);
 }
 
 void Game::playerNpcGreet(uint32_t playerId, uint32_t npcId)
