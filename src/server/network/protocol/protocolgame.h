@@ -157,11 +157,13 @@ private:
 	void sendTeamFinderList();
 	void sendLeaderTeamFinder(bool reset);
 	void createLeaderTeamFinder(NetworkMessage &msg);
+	void parsePartyAnalyzerAction(NetworkMessage &msg) const;
 	void parseLeaderFinderWindow(NetworkMessage &msg);
 	void parseMemberFinderWindow(NetworkMessage &msg);
 	void parseSendBuyCharmRune(NetworkMessage &msg);
 	void parseBestiarysendMonsterData(NetworkMessage &msg);
 	void addBestiaryTrackerList(NetworkMessage &msg);
+	void parseObjectInfo(NetworkMessage &msg);
 
 	void parseTeleport(NetworkMessage &msg);
 	void parseThrow(NetworkMessage &msg);
@@ -328,6 +330,7 @@ private:
 	void sendMarketDetail(uint16_t itemId);
 	void sendTradeItemRequest(const std::string &traderName, const Item *item, bool ack);
 	void sendCloseTrade();
+	void updatePartyTrackerAnalyzer(const Party* party);
 
 	void sendTextWindow(uint32_t windowTextId, Item *item, uint16_t maxlen, bool canWrite);
 	void sendTextWindow(uint32_t windowTextId, uint32_t itemId, const std::string &text);
@@ -405,7 +408,6 @@ private:
 	void sendUpdateSupplyTracker(const Item *item);
 	void sendUpdateImpactTracker(CombatType_t type, int32_t amount);
 	void sendUpdateInputAnalyzer(CombatType_t type, int32_t amount, std::string target);
-	void sendUpdateLootTracker(Item *item);
 
 	// Hotkey equip/dequip item
 	void parseHotkeyEquip(NetworkMessage &msg);
